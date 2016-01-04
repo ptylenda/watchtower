@@ -1,4 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
+
+import traceback
 from operator import itemgetter
 import os, sys, json, logging, time, threading, warnings, collections
 
@@ -14,6 +16,7 @@ from botocore.exceptions import ClientError
 
 handler_base_class = logging.Handler
 
+
 def _idempotent_create(_callable, *args, **kwargs):
     try:
         _callable(*args, **kwargs)
@@ -21,8 +24,20 @@ def _idempotent_create(_callable, *args, **kwargs):
         if e.response.get("Error", {}).get("Code") != "ResourceAlreadyExistsException":
             raise
 
+
+def _is_called_recursively():
+    stack = traceback.extract_stack()
+    calling_func = stack[-2]
+    call_count = 0
+    for line in stack:
+        if line[0] == calling_func[0] and line[2] == calling_func[2]:
+            call_count += 1
+    return call_count > 1
+
+
 class PyCWLWarning(UserWarning):
     pass
+
 
 class CloudWatchLogHandler(handler_base_class):
     """
@@ -94,6 +109,10 @@ class CloudWatchLogHandler(handler_base_class):
         self.sequence_tokens[stream_name] = response["nextSequenceToken"]
 
     def emit(self, message):
+        # We have to avoid any recursive calls by methods that "log while logging"
+        if _is_called_recursively():
+            return
+
         stream_name = message.name
         if stream_name not in self.sequence_tokens:
             _idempotent_create(self.cwl_client.create_log_stream,
